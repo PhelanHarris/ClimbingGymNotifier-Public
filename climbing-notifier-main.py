@@ -9,7 +9,12 @@ from time import sleep
 from logging.handlers import RotatingFileHandler
 from lib import get_time_slot_availability
 from datetime import datetime, timedelta
-import requests
+from constants import (
+    TWILIO_SID,
+    TWILIO_AUTH_TOKEN,
+    TWILIO_PHONE_NUMBER,
+    REQUEST_INTERVAL,
+)
 import traceback
 import logging
 import os
@@ -26,10 +31,6 @@ logger.addHandler(handler)
 
 logger.info("Climbing Gym Notifier main app starting up...")
 
-TWILIO_SID = "REDACTED"
-TWILIO_AUTH_TOKEN = "REDACTED"
-TWILIO_PHONE_NUMBER = 1111111111  # REDACTED
-REQUEST_INTERVAL = 60  # seconds
 
 facility_repository = FacilityRepository()
 user_repository = UserRepository()
@@ -141,7 +142,8 @@ try:
                         logger.error(str(e))
                         admin_user = user_repository.find_admin_user()
                         if send_text(
-                            "Climbing Gym Notifier app: Error connecting to server!", admin_user
+                            "Climbing Gym Notifier app: Error connecting to server!",
+                            admin_user,
                         ):
                             last_error_notification_date = datetime.now()
 
@@ -215,5 +217,6 @@ except Exception as e:
     logger.error(traceback.format_exc())
     admin_user = user_repository.find_admin_user()
     send_text(
-        "Climbing Gym Notifier app: Fatal error has occurred, check the log file!", admin_user
+        "Climbing Gym Notifier app: Fatal error has occurred, check the log file!",
+        admin_user,
     )

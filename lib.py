@@ -1,6 +1,5 @@
 import requests
-
-HIVE_URL = "https://app.rockgympro.com/b/widget/?a=equery"
+from constants import HIVE_URL
 
 
 def get_time_slot_availability(date_to_check, offering_guid):
