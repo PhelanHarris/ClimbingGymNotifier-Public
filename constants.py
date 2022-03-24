@@ -1,0 +1,5 @@
+TWILIO_SID = "REDACTED"
+TWILIO_AUTH_TOKEN = "REDACTED"
+TWILIO_PHONE_NUMBER = 1111111111  # REDACTED
+REQUEST_INTERVAL = 60  # seconds
+HIVE_URL = "https://app.rockgympro.com/b/widget/?a=equery"
