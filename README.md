@@ -1,4 +1,4 @@
-# HiveNotifier
+# Climbing Gym Notifier
 This is a personal project to make it easier to get spots at the climbing gym when they're all full. It is built/tested using Python 3.8
 
 ### Chat Bot
