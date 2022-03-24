@@ -1,15 +1,9 @@
-# $ ssh pi@raspberrypi.local
-# $ S*******
-# $ screen
-# $ python3 hive-notifier.py
-# $ CTRL-A, D
-# $ screen -ls
-# $ screen -r $screen_running
-
-from repositories.Repository import Repository
-from models.Facility import Facility
-from models.User import User
-from models.Notification import Notification
+from persistence.repositories.FacilityRepository import FacilityRepository
+from persistence.repositories.NotificationRepository import NotificationRepository
+from persistence.repositories.UserRepository import UserRepository
+from persistence.models.Facility import Facility
+from persistence.models.Notification import Notification
+from persistence.models.User import User
 from twilio.rest import Client
 from time import sleep
 from logging.handlers import RotatingFileHandler
@@ -30,16 +24,16 @@ formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 handler.setFormatter(formatter)
 logger.addHandler(handler)
 
-logger.info("Hive Notifier main app starting up...")
+logger.info("Climbing Gym Notifier main app starting up...")
 
 TWILIO_SID = "REDACTED"
 TWILIO_AUTH_TOKEN = "REDACTED"
 TWILIO_PHONE_NUMBER = 1111111111  # REDACTED
-REQUEST_INTERVAL = 20  # seconds
+REQUEST_INTERVAL = 60  # seconds
 
-facility_repository = Repository(Facility)
-user_repository = Repository(User)
-notification_repository = Repository(Notification)
+facility_repository = FacilityRepository()
+user_repository = UserRepository()
+notification_repository = NotificationRepository()
 last_error_notification_date = datetime.now() - timedelta(1)
 
 
@@ -55,29 +49,74 @@ def send_text(message, user):
         return False
 
 
+def get_notifications_grouped_by_facility():
+    facilities_dict = {
+        facility.id: facility for facility in facility_repository.find_all()
+    }
+    notifications = notification_repository.find_all_enabled()
+
+    for facility_id in facilities_dict:
+        facilities_dict[facility_id].notifications_dict = {}
+
+    for notification in notifications:
+        facility = facilities_dict[notification.facility_id]
+        if notification.notification_date not in facility.notifications_dict:
+            facility.notifications_dict[notification.notification_date] = []
+
+        facility.notifications_dict[notification.notification_date].append(notification)
+
+    return facilities_dict
+
+
+def get_users_dict():
+    users = user_repository.find_all()
+    return {user.id: user for user in users}
+
+
+def get_priority_user_ids(users):
+    priority_users = list(filter(lambda user: user.is_admin == 1, users))
+    return list(map(lambda user: user.id, priority_users))
+
+
+def get_notifications_to_check(facility, notification_date, priority_user_ids):
+    notifications_to_check = get_notifications_to_check()
+    for notification in facility.notifications_dict[notification_date]:
+        if (
+            notification.user_id in priority_user_ids
+            or len(
+                list(
+                    filter(
+                        lambda n: n.time_slot == notification.time_slot
+                        and n.user_id in priority_user_ids,
+                        facility.notifications_dict[notification_date],
+                    )
+                )
+            )
+            == 0
+        ):
+            notifications_to_check.append(notification)
+
+
+def timeslot_has_started_already(notification):
+    year = int(notification.notification_date.split("-")[0])
+    month = int(notification.notification_date.split("-")[1])
+    day = int(notification.notification_date.split("-")[2])
+    time_string = notification.time_slot.split(",")[2].split("to")[0].strip()
+    hour = int(time_string.split(" ")[0].split(":")[0])
+    if "PM" in time_string:
+        hour += 12
+    minute = int(time_string.split(" ")[0].split(":")[1]) if ":" in time_string else 0
+
+    notification_datetime = datetime(year, month, day, hour, minute)
+    return notification_datetime < (datetime.now() + timedelta(minutes=3))
+
+
 try:
     while True:
         # Get and prepare DB data
-        facilities_dict = {
-            facility.id: facility for facility in facility_repository.find_all()
-        }
-        users = user_repository.find_all()
-        users_dict = {user.id: user for user in users}
-        priority_users = list(filter(lambda user: user.is_admin == 1, users))
-        priority_user_ids = list(map(lambda user: user.id, priority_users))
-        notifications = notification_repository.find_all("WHERE enabled = 1")
-
-        for facility_id in facilities_dict:
-            facilities_dict[facility_id].notifications_dict = {}
-
-        for notification in notifications:
-            facility = facilities_dict[notification.facility_id]
-            if notification.notification_date not in facility.notifications_dict:
-                facility.notifications_dict[notification.notification_date] = []
-
-            facility.notifications_dict[notification.notification_date].append(
-                notification
-            )
+        facilities_dict = get_notifications_grouped_by_facility()
+        users_dict = get_users_dict()
+        priority_user_ids = get_priority_user_ids(user_repository.find_all())
 
         # Check for available slots
         checked_slot = False
@@ -100,57 +139,20 @@ try:
                         last_error_notification_date + timedelta(hours=1)
                     ):
                         logger.error(str(e))
-                        admin_user = user_repository.find_all(
-                            where_clause="WHERE is_admin = 1"
-                        )[0]
+                        admin_user = user_repository.find_admin_user()
                         if send_text(
-                            "Hive Notifier app: Error connecting to server!", admin_user
+                            "Climbing Gym Notifier app: Error connecting to server!", admin_user
                         ):
                             last_error_notification_date = datetime.now()
 
                 if time_slot_availability is not None:
-                    notifications_to_check = []
-                    for notification in facility.notifications_dict[notification_date]:
-                        if (
-                            notification.user_id in priority_user_ids
-                            or len(
-                                list(
-                                    filter(
-                                        lambda n: n.time_slot == notification.time_slot
-                                        and n.user_id in priority_user_ids,
-                                        facility.notifications_dict[notification_date],
-                                    )
-                                )
-                            )
-                            == 0
-                        ):
-                            notifications_to_check.append(notification)
+                    notifications_to_check = get_notifications_to_check(
+                        facility, notification_date, priority_user_ids
+                    )
 
                     for notification in notifications_to_check:
                         if notification.time_slot not in time_slot_availability:
-                            year = int(notification.notification_date.split("-")[0])
-                            month = int(notification.notification_date.split("-")[1])
-                            day = int(notification.notification_date.split("-")[2])
-                            time_string = (
-                                notification.time_slot.split(",")[2]
-                                .split("to")[0]
-                                .strip()
-                            )
-                            hour = int(time_string.split(" ")[0].split(":")[0])
-                            if "PM" in time_string:
-                                hour += 12
-                            minute = (
-                                int(time_string.split(" ")[0].split(":")[1])
-                                if ":" in time_string
-                                else 0
-                            )
-                            notification_datetime = datetime(
-                                year, month, day, hour, minute
-                            )
-
-                            if notification_datetime < (
-                                datetime.now() + timedelta(minutes=3)
-                            ):
+                            if timeslot_has_started_already(notification):
                                 message_content = "Hive {} time slot {} has started, no free slot was found.".format(
                                     facility.location, notification.time_slot
                                 )
@@ -211,7 +213,7 @@ try:
 except Exception as e:
     logger.error(str(e))
     logger.error(traceback.format_exc())
-    admin_user = user_repository.find_all(where_clause="WHERE is_admin = 1")[0]
+    admin_user = user_repository.find_admin_user()
     send_text(
-        "Hive Notifier app: Fatal error has occurred, check the log file!", admin_user
+        "Climbing Gym Notifier app: Fatal error has occurred, check the log file!", admin_user
     )

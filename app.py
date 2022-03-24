@@ -1,10 +1,12 @@
 import logging
 from flask import Flask, request, redirect
 from twilio.twiml.messaging_response import MessagingResponse
-from repositories.Repository import Repository
-from models.User import User
-from models.Facility import Facility
-from models.Notification import Notification
+from persistence.models.User import User
+from persistence.models.Facility import Facility
+from persistence.models.Notification import Notification
+from persistence.repositories.UserRepository import UserRepository
+from persistence.repositories.FacilityRepository import FacilityRepository
+from persistence.repositories.NotificationRepository import NotificationRepository
 from datetime import date, timedelta, datetime
 from lib import get_time_slot_availability
 from logging.handlers import RotatingFileHandler
@@ -21,9 +23,9 @@ logger.addHandler(handler)
 
 app = Flask(__name__)
 
-user_repository = Repository(User)
-facility_repository = Repository(Facility)
-notification_repository = Repository(Notification)
+user_repository = UserRepository()
+facility_repository = FacilityRepository()
+notification_repository = NotificationRepository()
 
 
 def get_response_message(message="Invalid message."):
@@ -46,8 +48,8 @@ def sms_reply():
         if message_body == "":
             return get_response_message()
 
-        users = user_repository.find_all("WHERE phone_number = " + str(sender))
-        if len(users) < 1:
+        user = user_repository.find_by_phone_number()
+        if user == None:
             logger.info(
                 "Message recieved from unknown sender ({}): {}".format(
                     str(sender), message_body
@@ -58,7 +60,6 @@ def sms_reply():
             return get_response_message(
                 "Hi there! I don't recognize your number. Please reply with your name to create an account."
             )
-        user = users[0]
         logger.info(
             "Message recieved from {} ({}): {}".format(
                 user.name, str(sender), message_body
@@ -123,7 +124,7 @@ def sms_reply():
 
         if message_body == "commands":
             return get_response_message(
-                "Hive Notifier commands:\n\nTo create a notification for yourself, reply with the day of the week that you would like to book, and then follow subsequent instructions to pick your time slots. Add 'next' before the day to specify that day next week.\n\nTo change your current gym, reply 'change gym'.\n\nTo change your name, reply 'change name'.\n\nTo see all your current notifications, reply 'notifications'.\n\nTo remove all your notifications, reply 'remove all'.".format(
+                "Climbing Gym Notifier commands:\n\nTo create a notification for yourself, reply with the day of the week that you would like to book, and then follow subsequent instructions to pick your time slots. Add 'next' before the day to specify that day next week.\n\nTo change your current gym, reply 'change gym'.\n\nTo change your name, reply 'change name'.\n\nTo see all your current notifications, reply 'notifications'.\n\nTo remove all your notifications, reply 'remove all'.".format(
                     facility.location, facilities_string
                 )
             )
@@ -161,18 +162,12 @@ def sms_reply():
             if user.most_recent_notification_id == 0:
                 return get_response_message("Error: No notifications to remove.")
 
-            notification = notification_repository.find_by_id(
-                user.most_recent_notification_id
+            notification_repository.delete_all_for_user_on_same_day_as(
+                user.id, user.most_recent_notification_id
             )
-            notifications = notification_repository.find_all(
-                "WHERE user_id = {} and notification_date = '{}'".format(
-                    user.id, notification.notification_date
-                )
-            )
-            for notification in notifications:
-                notification_repository.delete(notification)
             user.most_recent_notification_id = 0
             user_repository.save(user)
+
             return get_response_message(
                 "Cancelled all notifications for {}.".format(
                     notification.notification_date
@@ -180,11 +175,7 @@ def sms_reply():
             )
 
         if message_body == "remove all":
-            notifications = notification_repository.find_all(
-                "WHERE user_id = {}".format(str(user.id))
-            )
-            for notification in notifications:
-                notification_repository.delete(notification)
+            notification_repository.delete_all_for_user(user.id)
             user.most_recent_notification_id = 0
             user_repository.save(user)
             return get_response_message(
@@ -192,9 +183,7 @@ def sms_reply():
             )
 
         if message_body == "notifications":
-            notifications = notification_repository.find_all(
-                "WHERE user_id = {} AND enabled = 1".format(str(user.id))
-            )
+            notifications = notification_repository.find_all_enabled_by_user_id(user.id)
             if len(notifications) == 0:
                 return get_response_message(
                     "You do not currently have any notifications set up."
